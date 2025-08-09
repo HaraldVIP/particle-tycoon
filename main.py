@@ -15,11 +15,27 @@ Controls:
 """
 
 if __name__ == "__main__":
-    # Import the original game file for now
-    # This allows easy startup while we refactor
-    import particle_tycoon
-    
-    # In the future, this will be:
-    # from core.game import Game
-    # game = Game()
-    # game.run()
+    # Use the complete modular Game class
+    try:
+        print("Starting Particle Tycoon (Complete Modular Version)...")
+        
+        # Initialize Pygame
+        import pygame
+        pygame.init()
+        pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+        
+        # Import and run the complete game
+        from core.game import Game
+        
+        game = Game()
+        game.run()
+        
+        print("Game closed successfully!")
+        
+    except KeyboardInterrupt:
+        print("\nGame closed by user")
+    except Exception as e:
+        print(f"Error starting game: {e}")
+        import traceback
+        traceback.print_exc()
+        input("Press Enter to close...")

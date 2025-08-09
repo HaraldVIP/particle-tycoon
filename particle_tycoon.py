@@ -9,6 +9,13 @@ from collections import deque
 import pygame.sndarray
 import itertools
 
+# Try to import gfxdraw for better performance, fallback if not available
+try:
+    import pygame.gfxdraw
+    HAS_GFXDRAW = True
+except ImportError:
+    HAS_GFXDRAW = False
+
 # Initialize Pygame
 pygame.init()
 pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
@@ -290,7 +297,7 @@ class Camera:
         
         # Zoom limits - allow much more zoom out for bigger map
         self.min_zoom = 0.05
-        self.max_zoom = 5.0
+        self.max_zoom = 5.0  # Limit max zoom to prevent performance issues
     
     def is_map_mode(self) -> bool:
         """Check if camera is in map mode (when zoomed almost completely out)"""
@@ -530,7 +537,7 @@ class MusicSelector:
             screen.blit(name_text, name_rect)
 
 class Particle:
-    def __init__(self, x: float, y: float, z: float = None, bouncing: bool = False):
+    def __init__(self, x: float, y: float, z: float = None, bouncing: bool = False, from_spawner: bool = False):
         self.x = x
         self.y = y
         self.z = z if z is not None else random.uniform(0.3, 1.0)  # Depth for parallax
@@ -543,6 +550,7 @@ class Particle:
         self.mass = 1
         self.alive = True
         self.bouncing = bouncing
+        self.from_spawner = from_spawner  # Track if spawned from user-placed spawner
         
         # Visual properties
         if bouncing:
@@ -830,27 +838,26 @@ class Particle:
                     pygame.draw.circle(screen, color[:3], (int(px), int(py)), max(1, p['radius']))
             return
         
-        # Enhanced multi-layer aura effect with distance falloff - improved visibility
-        if camera.zoom > 0.2 and scaled_radius > 1:  # Show aura at more zoom levels
+        # Enhanced multi-layer aura effect - FULL QUALITY RESTORED
+        if camera.zoom > 0.2 and scaled_radius > 1:  # Show at all zoom levels
             # Create multiple glow layers for satisfying aura
             aura_layers = [
-                (scaled_radius * 2.5, alpha * 0.2),  # Outer glow - more visible
+                (scaled_radius * 2.5, alpha * 0.2),  # Outer glow
                 (scaled_radius * 2.0, alpha * 0.3),  # Mid glow
-                (scaled_radius * 1.5, alpha * 0.5),  # Inner glow - brighter
+                (scaled_radius * 1.5, alpha * 0.5),  # Inner glow
             ]
             
             for aura_radius, aura_alpha in aura_layers:
-                if aura_alpha > 3:  # Lower threshold for visibility
+                if aura_alpha > 3:
                     aura_size = max(2, int(aura_radius))
-                    # Create glow surface with proper alpha
                     glow_surf = pygame.Surface((aura_size * 2, aura_size * 2), pygame.SRCALPHA)
-                    glow_color = (*self.color, max(8, int(aura_alpha)))  # Higher minimum alpha
+                    glow_color = (*self.color, max(8, int(aura_alpha)))
                     pygame.draw.circle(glow_surf, glow_color, (aura_size, aura_size), aura_size)
                     screen.blit(glow_surf, (int(screen_x - aura_size), int(screen_y - aura_size)))
         
-        # Simplified, cleaner trail rendering
-        if len(self.trail) > 2 and camera.zoom > 0.4:
-            trail_points = list(self.trail)[-6:]  # Only use last 6 points for clean trails
+        # Enhanced trail rendering with fade effects - FULL QUALITY
+        if len(self.trail) > 2 and camera.zoom > 0.4:  # Show trails at all zoom levels
+            trail_points = list(self.trail)  # Use all trail points for full quality
             
             for i in range(len(trail_points) - 1):
                 tx, ty, tz = trail_points[i]
@@ -860,11 +867,32 @@ class Particle:
                 if (-20 <= trail_screen_x <= camera.screen_width + 20 and 
                     -20 <= trail_screen_y <= camera.screen_height + 20):
                     
-                    # Smooth fade from back to front
-                    trail_alpha = int(alpha * (i + 1) / len(trail_points) * 0.6)
+                    # Enhanced fade effects based on particle state
+                    base_trail_alpha = alpha * (i + 1) / len(trail_points) * 0.8  # Stronger trails
+                    
+                    # Fade-in effect for newly spawned particles (except from spawners)
+                    if not self.from_spawner and self.age < 0.5:
+                        fade_in_factor = self.age / 0.5  # Fade in over 0.5 seconds
+                        base_trail_alpha *= fade_in_factor
+                    
+                    # Fade-out effect when particle is dying
+                    if self.fading:
+                        fade_out_factor = 1.0 - (self.fade_timer / 1.0)
+                        base_trail_alpha *= fade_out_factor
+                    
+                    trail_alpha = int(base_trail_alpha)
                     if trail_alpha > 8:
-                        trail_size = max(1, int(scaled_radius * 0.7 * (i + 1) / len(trail_points)))
+                        trail_size = max(1, int(scaled_radius * 0.8 * (i + 1) / len(trail_points)))
                         trail_color = (*self.color, trail_alpha)
+                        
+                        # Add glow to trail points for extra visual appeal
+                        if trail_size > 1 and camera.zoom > 1.0:
+                            glow_size = trail_size + 2
+                            glow_alpha = max(3, trail_alpha // 3)
+                            glow_surf = pygame.Surface((glow_size * 2, glow_size * 2), pygame.SRCALPHA)
+                            pygame.draw.circle(glow_surf, (*self.color, glow_alpha), (glow_size, glow_size), glow_size)
+                            screen.blit(glow_surf, (int(trail_screen_x - glow_size), int(trail_screen_y - glow_size)))
+                        
                         pygame.draw.circle(screen, trail_color[:3], (int(trail_screen_x), int(trail_screen_y)), trail_size)
         
         # Draw main particle with enhanced appearance
@@ -1223,12 +1251,23 @@ class Planet:
             screen_y < -margin or screen_y > camera.screen_height + margin):
             return
         
-        # Draw atmospheric area (air resistance zone) - only at moderate zoom levels
-        if camera.zoom > 0.4 and camera.zoom < 4.0 and air_radius > 4:
-            # Create surface only when needed, with optimized size
-            atmo_surf = pygame.Surface((air_radius * 2, air_radius * 2), pygame.SRCALPHA)
-            pygame.draw.circle(atmo_surf, (100, 150, 255, 15), (air_radius, air_radius), air_radius)
-            screen.blit(atmo_surf, (screen_x - air_radius, screen_y - air_radius))
+        # Draw atmospheric area (air resistance zone) - optimized for performance
+        # Extend atmosphere visibility range and limit size to prevent lag
+        if camera.zoom > 0.4 and camera.zoom < 8.0 and air_radius > 4 and air_radius < 300:
+            # Use direct drawing instead of creating surfaces for better performance
+            # Draw multiple concentric circles with decreasing alpha for atmosphere effect
+            for i in range(3):
+                atmo_radius = air_radius - (i * air_radius // 4)
+                if atmo_radius > 2:
+                    alpha = max(5, 15 - (i * 5))  # Decreasing alpha: 15, 10, 5
+                    # Use pygame.gfxdraw for better alpha blending performance
+                    if HAS_GFXDRAW:
+                        pygame.gfxdraw.filled_circle(screen, int(screen_x), int(screen_y), atmo_radius, (100, 150, 255, alpha))
+                    else:
+                        # Fallback to regular circle if gfxdraw not available
+                        atmo_surf = pygame.Surface((atmo_radius * 2, atmo_radius * 2), pygame.SRCALPHA)
+                        pygame.draw.circle(atmo_surf, (100, 150, 255, alpha), (atmo_radius, atmo_radius), atmo_radius)
+                        screen.blit(atmo_surf, (screen_x - atmo_radius, screen_y - atmo_radius))
 
         # Debug rings for gravity and air resistance ranges - disable when heavily zoomed in
         if camera.zoom > 0.15 and camera.zoom < 4.0:
@@ -1381,7 +1420,7 @@ class ParticleEmitter:
             px = random.uniform(-self.world_width//2, self.world_width//2)
             py = random.uniform(-self.world_height//2, self.world_height//2)
             pz = random.uniform(0.3, 1.0)
-            self.particles.append(Particle(px, py, pz))
+            self.particles.append(Particle(px, py, pz, from_spawner=False))  # Main emitter particles fade in
             particles_spawned += 1
         # Play spawn sound for the first spawned particle (if any)
         if particles_spawned > 0 and self.sound_timer >= 0.05:
