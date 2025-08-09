@@ -1,0 +1,19 @@
+pygame>=2.6.0
+numpy>=1.24.3
+
+# Enhanced graphics and textures
+Pillow>=10.0.0              # Advanced image processing
+requests>=2.31.0            # For downloading online assets
+pygame-gui>=0.6.10          # Advanced UI components (optional)
+
+# Asset management and loading
+pathlib                     # Better path handling (built-in Python 3.4+)
+
+# Optional: Advanced graphics libraries
+# pyglet>=2.0.0             # Alternative to pygame with OpenGL support
+# moderngl>=5.8.0           # Modern OpenGL for advanced effects
+# glfw>=2.6.0               # Window management for moderngl
+
+# Development tools (optional)
+# black                     # Code formatter
+# pylint                    # Code linter
