@@ -53,10 +53,17 @@ class DwarfPlanet:
 
     def draw(self, screen, camera, gravity_distance: float = None, air_resistance_intensity: float = None):
         """Draw the dwarf planet (simplified)"""
+        screen_x, screen_y = camera.world_to_screen(self.x, self.y)
+
+        if camera.is_map_mode():
+            # In map mode, draw a simple small circle
+            map_radius = max(2, int(self.radius * 0.5)) # Smaller and fixed size
+            pygame.draw.circle(screen, self.color, (int(screen_x), int(screen_y)), map_radius)
+            return
+
         # Convert world position to screen position with wobble
         wobble_x = math.sin(self.wobble_timer) * 1.5 if self.wobble_timer > 0 else 0
         wobble_y = math.cos(self.wobble_timer * 1.2) * 1.5 if self.wobble_timer > 0 else 0
-        screen_x, screen_y = camera.world_to_screen(self.x, self.y)
         screen_x += wobble_x
         screen_y += wobble_y
         
@@ -162,10 +169,10 @@ class Planet:
         hover_scale = 1.15 if self.wobble_timer > 0 else 1.0
         
         if camera.is_map_mode():
-            # In map mode, planets are 0.5x size
-            map_mode_scale = 0.5
-            scaled_radius = max(4, int(self.radius * map_mode_scale * hover_scale))
-            air_radius = max(6, int(self.radius * 3 * map_mode_scale * hover_scale))
+            # In map mode, draw a simple larger circle
+            map_radius = max(4, int(self.radius * 0.7)) # Larger and fixed size
+            pygame.draw.circle(screen, self.color, (int(screen_x), int(screen_y)), map_radius)
+            return
         else:
             # Normal mode - scale with camera zoom
             scaled_radius = max(2, int(self.radius * camera.zoom * hover_scale))

@@ -10,164 +10,15 @@ from typing import List
 # Import from our modular structure
 from entities.particle import Particle
 from entities.planet import Planet, DwarfPlanet
+from entities.wall import Wall
+from entities.emitter import ParticleEmitter
+from entities.spawner import ParticleSpawner
 from systems.camera import Camera
 from systems.audio import generate_tick_sound, generate_spawn_sound
 from ui.components import Slider, MusicSelector
 from ui.effects import MoneyPopup, LightRay
+from graphics.background import StarField, TiledBackground
 from config.constants import *
-
-
-class Wall:
-    def __init__(self, x1: float, y1: float, x2: float, y2: float):
-        self.x1 = x1
-        self.y1 = y1
-        self.x2 = x2
-        self.y2 = y2
-        self.length = math.sqrt((x2-x1)**2 + (y2-y1)**2)
-        
-    def check_collision(self, px: float, py: float, radius: float) -> bool:
-        # Simple point-to-line distance check
-        A = py - self.y1
-        B = self.x1 - px
-        C = px * self.y1 - self.x1 * py
-        distance = abs(A * self.x2 + B * self.y2 + C) / math.sqrt(A*A + B*B) if A*A + B*B > 0 else float('inf')
-        return distance < radius
-        
-    def draw(self, screen, camera, gravity_distance: float = None, air_resistance_intensity: float = None):
-        sx1, sy1 = camera.world_to_screen(self.x1, self.y1)
-        sx2, sy2 = camera.world_to_screen(self.x2, self.y2)
-        pygame.draw.line(screen, (100, 100, 255), (sx1, sy1), (sx2, sy2), max(2, int(3 * camera.zoom)))
-
-
-class ParticleEmitter:
-    def __init__(self, world_width=80000, world_height=80000):
-        self.world_width = world_width
-        self.world_height = world_height
-        self.spawn_rate = 90  # particles per second
-        self.spawn_timer = 0
-        self.particles: List[Particle] = []
-        self.sound_timer = 0  # To limit sound frequency
-        
-    def update(self, dt: float, planets: List[Planet], sfx_volume: float = 0.5, camera=None, gravity_distance: float = 500.0, air_resistance_intensity: float = 0.5, walls: List[Wall] = None):
-        self.spawn_timer += dt
-        self.sound_timer += dt
-        spawn_interval = 1.0 / self.spawn_rate
-        particles_spawned = 0
-        while self.spawn_timer >= spawn_interval:
-            self.spawn_timer -= spawn_interval
-            px = random.uniform(-self.world_width//2, self.world_width//2)
-            py = random.uniform(-self.world_height//2, self.world_height//2)
-            pz = random.uniform(0.3, 1.0)
-            self.particles.append(Particle(px, py, pz, from_spawner=False))  # Main emitter particles fade in
-            particles_spawned += 1
-        # Play spawn sound for the first spawned particle (if any)
-        if particles_spawned > 0 and self.sound_timer >= 0.05:
-            try:
-                p = self.particles[-1]
-                spawn_sound = generate_spawn_sound()
-                if camera:
-                    dx = p.x - camera.x
-                    dy = p.y - camera.y
-                    distance = math.sqrt(dx*dx + dy*dy)
-                    if distance < 5000:  # Only play if reasonably close
-                        volume = max(0.05, min(sfx_volume, sfx_volume * (5000 - distance) / 5000))
-                        spawn_sound.set_volume(volume)
-                        spawn_sound.play()
-                self.sound_timer = 0
-            except:
-                pass  # Ignore sound errors
-        
-        # Update all particles
-        for particle in self.particles[:]:  # Use slice copy for safe removal
-            particle.update(dt, planets, gravity_distance, air_resistance_intensity, camera, sfx_volume, walls)
-            if not particle.alive:
-                self.particles.remove(particle)
-    
-    def draw(self, screen, camera, planets=None):
-        for particle in self.particles:
-            particle.draw(screen, camera, planets)
-
-
-class ParticleSpawner:
-    def __init__(self, x: float, y: float):
-        self.x = x
-        self.y = y
-        self.spawn_rate = 5  # particles per second
-        self.spawn_timer = 0
-        self.particles: List[Particle] = []
-        
-    def update(self, dt: float, planets: List[Planet], sfx_volume: float = 0.5, camera=None, gravity_distance: float = 500.0, air_resistance_intensity: float = 0.5, walls: List[Wall] = None):
-        self.spawn_timer += dt
-        spawn_interval = 1.0 / self.spawn_rate
-        while self.spawn_timer >= spawn_interval:
-            self.spawn_timer -= spawn_interval
-            # Spawn near the spawner
-            px = self.x + random.uniform(-50, 50)
-            py = self.y + random.uniform(-50, 50)
-            pz = random.uniform(0.3, 1.0)
-            self.particles.append(Particle(px, py, pz, from_spawner=True))  # Spawner particles don't fade in
-        
-        # Update all particles
-        for particle in self.particles[:]:  # Use slice copy for safe removal
-            particle.update(dt, planets, gravity_distance, air_resistance_intensity, camera, sfx_volume, walls)
-            if not particle.alive:
-                self.particles.remove(particle)
-    
-    def draw(self, screen, camera, planets=None):
-        # Draw the spawner itself
-        screen_x, screen_y = camera.world_to_screen(self.x, self.y)
-        pygame.draw.circle(screen, (255, 255, 0), (int(screen_x), int(screen_y)), max(3, int(8 * camera.zoom)))
-        pygame.draw.circle(screen, (255, 255, 255), (int(screen_x), int(screen_y)), max(3, int(8 * camera.zoom)), 2)
-        
-        # Draw particles
-        for particle in self.particles:
-            particle.draw(screen, camera, planets)
-
-
-class StarField:
-    def __init__(self, num_stars=300, width=80000, height=80000, min_depth=0.3, max_depth=1.0):
-        self.stars = []
-        for _ in range(num_stars):
-            self.stars.append({
-                'x': random.uniform(-width//2, width//2),
-                'y': random.uniform(-height//2, height//2),
-                'size': random.uniform(0.5, 2.0),
-                'depth': random.uniform(min_depth, max_depth),
-                'color': random.choice([(255, 255, 255), (255, 255, 200), (200, 200, 255), (255, 200, 200)]),
-                'base_brightness': random.randint(100, 255),
-                'twinkle_speed': random.uniform(0.5, 2.0),
-                'twinkle_phase': random.uniform(0, 2 * math.pi)
-            })
-
-    def draw(self, screen, camera):
-        t = pygame.time.get_ticks() / 1000.0
-        for star in self.stars:
-            px = (star['x'] - camera.x * star['depth']) * camera.zoom + camera.screen_width // 2
-            py = (star['y'] - camera.y * star['depth']) * camera.zoom + camera.screen_height // 2
-            size = max(1, int(star['size'] * camera.zoom * (1.2 - star['depth'])))
-            
-            # Enhanced twinkle
-            twinkle = 0.5 + 0.5 * math.sin(t * star['twinkle_speed'] + star['twinkle_phase'])
-            brightness = int(star['base_brightness'] * (0.7 + 0.3 * twinkle))
-            color = tuple(min(255, int(c * (0.7 + 0.3 * twinkle))) for c in star['color'])
-            
-            # Enhanced star rendering with lens flares
-            if 0 <= px < camera.screen_width and 0 <= py < camera.screen_height:
-                # Multiple glow layers for depth
-                if size > 1:
-                    for layer in range(3):
-                        layer_size = size + layer * 2
-                        layer_alpha = max(20, brightness // (layer + 1))
-                        glow_surf = pygame.Surface((layer_size * 2, layer_size * 2), pygame.SRCALPHA)
-                        glow_color = (*color, layer_alpha)
-                        pygame.draw.circle(glow_surf, glow_color, (layer_size, layer_size), layer_size)
-                        screen.blit(glow_surf, (px - layer_size, py - layer_size))
-                
-                # Main star
-                pygame.draw.circle(screen, color, (int(px), int(py)), size)
-
-
-# Background functionality removed as requested
 
 
 class Game:
@@ -180,8 +31,9 @@ class Game:
         # Camera system
         self.camera = Camera(SCREEN_WIDTH, SCREEN_HEIGHT)
         
-        # Star field
+        # Graphics
         self.starfield = StarField()
+        self.tiled_background = TiledBackground()
         
         # Game state
         self.money = 100
@@ -514,6 +366,9 @@ class Game:
         # Clear screen
         self.screen.fill(BLACK)
         
+        # Draw background
+        self.tiled_background.draw(self.screen, self.camera)
+
         # Draw starfield
         self.starfield.draw(self.screen, self.camera)
         
@@ -575,6 +430,12 @@ class Game:
         for i, control in enumerate(controls):
             control_text = self.small_font.render(control, True, LIGHT_GRAY)
             self.screen.blit(control_text, (10, 100 + i * 20))
+
+        # Map Mode Indicator
+        if self.camera.is_map_mode():
+            map_text = self.font.render("Map Mode", True, (255, 255, 0, 150))
+            text_rect = map_text.get_rect(center=(self.camera.screen_width // 2, self.camera.screen_height - 30))
+            self.screen.blit(map_text, text_rect)
         
         # Buy buttons
         buttons = [
