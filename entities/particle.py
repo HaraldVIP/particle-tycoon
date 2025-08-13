@@ -10,6 +10,8 @@ from collections import deque
 # Import constants
 from config.constants import PARTICLE_COLORS, WORLD_LIMIT
 
+from systems.audio import generate_explosion_sound
+
 # Avoid circular imports
 if TYPE_CHECKING:
     from entities.planet import Planet
@@ -178,6 +180,13 @@ class Particle:
         self.exploding = True
         self.explosion_timer = 0.0
         
+        try:
+            sound = generate_explosion_sound()
+            sound.set_volume(sfx_volume)
+            sound.play()
+        except Exception as e:
+            print(f"Error playing explosion sound: {e}")
+
         # Create explosion particles
         for _ in range(8):
             angle = random.uniform(0, 2 * math.pi)
@@ -217,103 +226,91 @@ class Particle:
         return 255
 
     def draw(self, screen, camera, planets=None):
-        """Render the particle"""
+        """Render the particle with Level of Detail (LOD) for performance."""
         if not self.alive:
             return
-        
-        # Simple world-to-screen conversion
+
         screen_x, screen_y = camera.world_to_screen(self.x, self.y)
-        margin = 50
-        if (screen_x < -margin or screen_x > camera.screen_width + margin or 
-            screen_y < -margin or screen_y > camera.screen_height + margin):
+        
+        # Aggressive culling
+        margin = 100 # Increased margin to avoid pop-in
+        if not (-margin < screen_x < camera.screen_width + margin and -margin < screen_y < camera.screen_height + margin):
             return
-        
-        # Better scaling - ensure particles are visible when zoomed out
-        raw_scaled_radius = self.radius * camera.zoom
-        if raw_scaled_radius < 0.5:
-            scaled_radius = 3  # Minimum 3 pixels when extremely zoomed out
-        elif raw_scaled_radius < 1.5:
-            scaled_radius = 3  # Still 3 pixels for small sizes
-        else:
-            scaled_radius = max(2, int(raw_scaled_radius))
-        
+
         alpha = self.get_alpha(camera)
-        if alpha == 0:  # Skip drawing completely if invisible
+        if alpha == 0:
             return
-        
-        # Explosion effect - simplified for performance
+
+        scaled_radius = max(1, int(self.radius * camera.zoom))
+
+        # Explosion effect
         if self.exploding:
             for p in self.explosion_particles:
                 px, py = camera.world_to_screen(p['x'], p['y'])
-                if 0 <= px < camera.screen_width and 0 <= py < camera.screen_height:
-                    color = (*p['color'][:3], min(255, int(p['alpha'])))
-                    pygame.draw.circle(screen, color[:3], (int(px), int(py)), max(1, p['radius']))
+                color = (*p['color'][:3], min(255, int(p['alpha'])))
+                pygame.draw.circle(screen, color[:3], (int(px), int(py)), max(1, int(p['radius'] * camera.zoom)))
+            return
+
+        # LOD-based rendering
+        zoom_level = camera.zoom
+        
+        # LOD 1: High detail (zoomed in)
+        if zoom_level > 0.8:
+            # Full aura and trail
+            self.draw_aura(screen, screen_x, screen_y, scaled_radius, alpha)
+            self.draw_trail(screen, camera, scaled_radius, alpha)
+            self.draw_core(screen, screen_x, screen_y, scaled_radius, alpha)
+        # LOD 2: Medium detail
+        elif zoom_level > 0.4:
+            # Simple trail, no aura
+            self.draw_trail(screen, camera, scaled_radius, alpha, simple=True)
+            self.draw_core(screen, screen_x, screen_y, scaled_radius, alpha)
+        # LOD 3: Low detail (zoomed out)
+        else:
+            # Just the core particle
+            self.draw_core(screen, screen_x, screen_y, scaled_radius, alpha, simple=True)
+
+    def draw_core(self, screen, x, y, radius, alpha, simple=False):
+        main_color = (*self.color, alpha)
+        pygame.draw.circle(screen, main_color[:3], (int(x), int(y)), radius)
+        if simple or radius <= 1:
             return
         
-        # Enhanced multi-layer aura effect with distance falloff
-        if camera.zoom > 0.3 and scaled_radius > 2:
-            for layer in range(2):
-                aura_size = int(self.glow_radius * camera.zoom * (1.5 - layer * 0.3))
-                if aura_size > scaled_radius + 2:
-                    aura_alpha = max(5, int(alpha * (0.15 - layer * 0.08)))
-                    glow_surf = pygame.Surface((aura_size * 2, aura_size * 2), pygame.SRCALPHA)
-                    glow_color = (*self.color, max(8, int(aura_alpha)))
-                    pygame.draw.circle(glow_surf, glow_color, (aura_size, aura_size), aura_size)
-                    screen.blit(glow_surf, (int(screen_x - aura_size), int(screen_y - aura_size)))
-        
-        # Enhanced trail rendering with fade effects - FULL QUALITY
-        if len(self.trail) > 2 and camera.zoom > 0.4:  # Show trails at all zoom levels
-            trail_points = list(self.trail)  # Use all trail points for full quality
-            
-            for i in range(len(trail_points) - 1):
-                tx, ty, tz = trail_points[i]
+        center_color = tuple(min(255, c + 80) for c in self.color)
+        center_radius = max(1, int(radius * 0.6))
+        pygame.draw.circle(screen, center_color, (int(x), int(y)), center_radius)
+
+    def draw_aura(self, screen, x, y, radius, alpha):
+        if radius <= 2: return
+        for layer in range(2):
+            aura_size = int(self.glow_radius * (1.5 - layer * 0.3) * camera.zoom)
+            if aura_size > radius + 2:
+                aura_alpha = max(5, int(alpha * (0.15 - layer * 0.08)))
+                glow_surf = pygame.Surface((aura_size * 2, aura_size * 2), pygame.SRCALPHA)
+                glow_color = (*self.color, max(8, int(aura_alpha)))
+                pygame.draw.circle(glow_surf, glow_color, (aura_size, aura_size), aura_size)
+                screen.blit(glow_surf, (int(x - aura_size), int(y - aura_size)))
+
+    def draw_trail(self, screen, camera, radius, alpha, simple=False):
+        if len(self.trail) < 2: return
+
+        points = list(self.trail)
+        if simple:
+            # Draw a simple line for the trail
+            start_pos = camera.world_to_screen(points[0][0], points[0][1])
+            end_pos = camera.world_to_screen(points[-1][0], points[-1][1])
+            trail_color = (*self.color, int(alpha * 0.5))
+            pygame.draw.line(screen, trail_color[:3], start_pos, end_pos, max(1, int(radius * 0.8)))
+        else:
+            # Draw detailed trail
+            for i in range(len(points) - 1):
+                tx, ty, _ = points[i]
                 trail_screen_x, trail_screen_y = camera.world_to_screen(tx, ty)
                 
-                # Check if trail point is on screen
-                if (-20 <= trail_screen_x <= camera.screen_width + 20 and 
-                    -20 <= trail_screen_y <= camera.screen_height + 20):
-                    
-                    # Enhanced fade effects based on particle state
-                    base_trail_alpha = alpha * (i + 1) / len(trail_points) * 0.8  # Stronger trails
-                    
-                    # Fade-in effect for newly spawned particles (except from spawners)
-                    if not self.from_spawner and self.age < 0.5:
-                        fade_in_factor = self.age / 0.5  # Fade in over 0.5 seconds
-                        base_trail_alpha *= fade_in_factor
-                    
-                    # Fade-out effect when particle is dying
-                    if self.fading:
-                        fade_out_factor = 1.0 - (self.fade_timer / 1.0)
-                        base_trail_alpha *= fade_out_factor
-                    
-                    trail_alpha = int(base_trail_alpha)
-                    if trail_alpha > 8:
-                        trail_size = max(1, int(scaled_radius * 0.8 * (i + 1) / len(trail_points)))
-                        trail_color = (*self.color, trail_alpha)
-                        
-                        # Add glow to trail points for extra visual appeal
-                        if trail_size > 1 and camera.zoom > 1.0:
-                            glow_size = trail_size + 2
-                            glow_alpha = max(3, trail_alpha // 3)
-                            glow_surf = pygame.Surface((glow_size * 2, glow_size * 2), pygame.SRCALPHA)
-                            pygame.draw.circle(glow_surf, (*self.color, glow_alpha), (glow_size, glow_size), glow_size)
-                            screen.blit(glow_surf, (int(trail_screen_x - glow_size), int(trail_screen_y - glow_size)))
-                        
-                        pygame.draw.circle(screen, trail_color[:3], (int(trail_screen_x), int(trail_screen_y)), trail_size)
-        
-        # Draw main particle with enhanced appearance
-        main_color = (*self.color, alpha)
-        pygame.draw.circle(screen, main_color[:3], (int(screen_x), int(screen_y)), scaled_radius)
-        
-        # Add bright center with gradient effect
-        if scaled_radius > 1:
-            # Bright inner core
-            center_color = tuple(min(255, c + 80) for c in self.color)
-            center_radius = max(1, int(scaled_radius * 0.6))
-            pygame.draw.circle(screen, center_color, (int(screen_x), int(screen_y)), center_radius)
-            
-            # Very bright center point
-            if scaled_radius > 2:
-                core_color = tuple(min(255, c + 120) for c in self.color)
-                core_radius = max(1, int(scaled_radius * 0.3))
-                pygame.draw.circle(screen, core_color, (int(screen_x), int(screen_y)), core_radius)
+                base_trail_alpha = alpha * (i + 1) / len(points) * 0.8
+                trail_alpha = int(base_trail_alpha)
+
+                if trail_alpha > 8:
+                    trail_size = max(1, int(radius * 0.8 * (i + 1) / len(points)))
+                    trail_color = (*self.color, trail_alpha)
+                    pygame.draw.circle(screen, trail_color[:3], (int(trail_screen_x), int(trail_screen_y)), trail_size)

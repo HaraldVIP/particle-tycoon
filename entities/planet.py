@@ -4,6 +4,7 @@ Planet and DwarfPlanet classes - handles planet physics, rendering, and behavior
 import pygame
 import random
 import math
+import itertools
 from typing import TYPE_CHECKING
 
 # Import constants
@@ -18,267 +19,231 @@ except ImportError:
 
 # Avoid circular imports
 if TYPE_CHECKING:
-    pass
+    from systems.camera import Camera
+
+# Spacey planet names
+SPACEY_NAMES = [
+    "Nebulon", "Quasar", "Andromeda", "Pulsara", "Galaxion", "Stellara", "Cosmica", "Astrolis", "Vortexia", "Nova Prime", "Celestia", "Orbitron", "Zenith", "Eclipse", "Cometia", "Lunaris", "Solara", "Meteorix", "Auroria", "Spectra"
+]
+planet_name_counter = itertools.count(1)
+
+def generate_planet_name():
+    base = random.choice(SPACEY_NAMES)
+    num = next(planet_name_counter)
+    return f"{base}-{num}"
 
 
 class DwarfPlanet:
     """A smaller, cheaper version of Planet with reduced capabilities"""
-    def __init__(self, x: float, y: float, radius: float = 20):
+    def __init__(self, x: float, y: float, radius: float = 18):
         self.x = x
         self.y = y
         self.radius = radius
-        self.mass = radius * 0.8  # Lighter than regular planets
-        self.gravity_distance = 300  # Shorter gravity reach
+        self.base_mass = radius * 1.5
+        self.gravity_level = 1
+        self.mass = self.base_mass * self.gravity_level
+        self.particles_collected = 0
+        self.upgrade_cost = 30
+        self.name = generate_planet_name()
         
-        # Visual properties - simpler than regular planets
-        self.planet_type = random.choice(PLANET_TYPES)
+        self.gravity_distance = 150
+        self.air_resistance_intensity = 0.3
+        self.has_clone_orbit = False
+
+        self.planet_type = {"name": "Dwarf", "color": (139, 90, 43), "rings": False, "spots": False}
         self.color = self.planet_type["color"]
         
-        # Hover effect
         self.wobble_timer = 0
-        
-        # Collection stats
-        self.particles_collected = 0
-        self.money_generated = 0.0
+        self.counter_bounce_timer = 0
+        self.counter_bounce_scale = 1.0
+
+    def collect_particle(self):
+        self.particles_collected += 1
+        growth_factor = 1.001
+        self.radius *= growth_factor
+        self.mass *= 1.0005
+        self.counter_bounce_timer = 0.3
+        self.counter_bounce_scale = 1.3
+
+    def upgrade_gravity(self):
+        if self.gravity_level < 3:
+            self.gravity_level += 1
+            self.mass = self.base_mass * self.gravity_level
+            self.upgrade_cost = int(self.upgrade_cost * 1.8)
 
     def update(self, dt, is_hovered=False):
-        """Update dwarf planet state"""
-        # Hover wobble effect
+        if self.counter_bounce_timer > 0:
+            self.counter_bounce_timer -= dt
+            progress = 1.0 - (self.counter_bounce_timer / 0.3)
+            if progress < 0.5:
+                self.counter_bounce_scale = 1.0 + (progress * 2) * 0.3
+            else:
+                self.counter_bounce_scale = 1.3 - ((progress - 0.5) * 2) * 0.3
+            if self.counter_bounce_timer <= 0:
+                self.counter_bounce_scale = 1.0
+
         if is_hovered:
-            self.wobble_timer += dt * 8  # Faster wobble for dwarf planets
-            if self.wobble_timer > 2 * math.pi:
-                self.wobble_timer -= 2 * math.pi
+            self.wobble_timer += dt * 6
         else:
             self.wobble_timer = 0
 
-    def draw(self, screen, camera, gravity_distance: float = None, air_resistance_intensity: float = None):
-        """Draw the dwarf planet (simplified)"""
+    def draw(self, screen, camera: 'Camera', gravity_distance: float = None, air_resistance_intensity: float = None):
         screen_x, screen_y = camera.world_to_screen(self.x, self.y)
 
         if camera.is_map_mode():
-            # In map mode, draw a simple small circle
-            map_radius = max(2, int(self.radius * 0.5)) # Smaller and fixed size
+            map_radius = max(2, int(self.radius * 0.5))
             pygame.draw.circle(screen, self.color, (int(screen_x), int(screen_y)), map_radius)
             return
 
-        # Convert world position to screen position with wobble
-        wobble_x = math.sin(self.wobble_timer) * 1.5 if self.wobble_timer > 0 else 0
-        wobble_y = math.cos(self.wobble_timer * 1.2) * 1.5 if self.wobble_timer > 0 else 0
+        wobble_x = math.sin(self.wobble_timer) * 1 if self.wobble_timer > 0 else 0
+        wobble_y = math.cos(self.wobble_timer * 1.3) * 1 if self.wobble_timer > 0 else 0
         screen_x += wobble_x
         screen_y += wobble_y
         
-        # Scale with zoom and hover effect
         hover_scale = 1.1 if self.wobble_timer > 0 else 1.0
         scaled_radius = max(2, int(self.radius * camera.zoom * hover_scale))
         
-        # Only draw if visible
         margin = scaled_radius + 20
-        if (screen_x < -margin or screen_x > camera.screen_width + margin or 
-            screen_y < -margin or screen_y > camera.screen_height + margin):
+        if not (-margin < screen_x < camera.screen_width + margin and -margin < screen_y < camera.screen_height + margin):
             return
         
-        # Draw simple planet (no atmosphere for dwarf planets)
         pygame.draw.circle(screen, self.color, (int(screen_x), int(screen_y)), scaled_radius)
-        
-        # Add simple spots if the type has them
-        if self.planet_type["spots"] and scaled_radius > 4:
-            spot_color = tuple(max(0, c - 30) for c in self.color)
-            for _ in range(2):  # Fewer spots than regular planets
-                spot_angle = random.uniform(0, 2 * math.pi)
-                spot_distance = random.uniform(0.2, 0.6) * scaled_radius
-                spot_x = int(screen_x + math.cos(spot_angle) * spot_distance)
-                spot_y = int(screen_y + math.sin(spot_angle) * spot_distance)
-                spot_radius = max(1, scaled_radius // 6)
-                pygame.draw.circle(screen, spot_color, (spot_x, spot_y), spot_radius)
-        
-        # Simple outline
-        outline_color = tuple(max(0, c - 50) for c in self.color)
-        pygame.draw.circle(screen, outline_color, (int(screen_x), int(screen_y)), scaled_radius, 2)
-
-    def draw_preview(self, screen, x, y, size=16):
-        """Draw a small preview of the dwarf planet for the UI"""
-        # Draw base (simpler than Planet)
-        pygame.draw.circle(screen, self.color, (x, y), size)
-        
-        # Simple outline
-        outline_color = tuple(max(0, c - 50) for c in self.color)
-        pygame.draw.circle(screen, outline_color, (x, y), size, 1)
+        if self.wobble_timer > 0:
+            pygame.draw.circle(screen, (200, 200, 200), (int(screen_x), int(screen_y)), scaled_radius, 2)
+        pygame.draw.circle(screen, (0,0,0), (int(screen_x), int(screen_y)), scaled_radius, 1)
 
 
 class Planet:
-    def __init__(self, x: float, y: float, radius: float = 48):  # 4x bigger than original
+    def __init__(self, x: float, y: float, radius: float = 48):
         self.x = x
         self.y = y
         self.radius = radius
-        self.mass = radius * 2.0  # Mass affects gravity
-        self.gravity_distance = 500  # How far gravity reaches
+        self.base_mass = radius * 2
+        self.gravity_level = 1
+        self.mass = self.base_mass * self.gravity_level
+        self.particles_collected = 0
+        self.upgrade_cost = 75
+        self.name = generate_planet_name()
+
+        self.base_gravity_distance = 500.0
+        self.gravity_distance = self.base_gravity_distance
+        self.base_air_resistance_intensity = 0.5
+        self.air_resistance_intensity = self.base_air_resistance_intensity
+
+        self.has_clone_orbit = False
+        self.clone_orbit_radius = self.radius * 4
+        self.clone_orbit_cost = 150
         
-        # Visual properties
         self.planet_type = random.choice(PLANET_TYPES)
         self.color = self.planet_type["color"]
         self.has_rings = self.planet_type["rings"]
         self.has_spots = self.planet_type["spots"]
-        
-        # Generate consistent spots for this planet
         self.spots = []
         if self.has_spots:
-            num_spots = random.randint(3, 7)
-            for _ in range(num_spots):
-                angle = random.uniform(0, 2 * math.pi)
-                distance = random.uniform(0.2, 0.8)
-                size = random.uniform(0.1, 0.25)
-                self.spots.append((angle, distance, size))
+            for _ in range(random.randint(2, 5)):
+                self.spots.append((random.uniform(-0.8, 0.8), random.uniform(-0.8, 0.8)))
         
-        # Ring properties
-        if self.has_rings:
-            self.ring_inner_radius = 1.3
-            self.ring_outer_radius = 1.8
-            self.ring_color = tuple(max(0, c - 40) for c in self.color)
-        
-        # Hover effect
+        self.counter_bounce_timer = 0
+        self.counter_bounce_scale = 1.0
+        self.shimmer_timer = 0
+        self.shimmer_intensity = 0
         self.wobble_timer = 0
-        
-        # Collection tracking
-        self.particles_collected = 0
-        self.money_generated = 0.0
-        
-        # Performance optimization
-        self._cached_spots = None
-        self._cached_radius = None
+
+    def collect_particle(self):
+        self.particles_collected += 1
+        self.radius *= 1.002
+        self.mass *= 1.001
+        self.gravity_distance *= 1.001
+        self.air_resistance_intensity *= 1.001
+        self.clone_orbit_radius = self.radius * 4
+        self.counter_bounce_timer = 0.5
+        self.counter_bounce_scale = 1.5
+        self.shimmer_timer = 0.3
+        self.shimmer_intensity = 1.0
+        return 1 # Return value of particle
+
+    def upgrade_gravity(self):
+        self.gravity_level += 1
+        self.mass = self.base_mass * (1 + (self.gravity_level - 1) * 0.5)
+        self.gravity_distance = self.base_gravity_distance * (1 + (self.gravity_level - 1) * 0.3)
+        self.air_resistance_intensity = self.base_air_resistance_intensity * (1 + (self.gravity_level - 1) * 0.4)
+        self.upgrade_cost = int(self.upgrade_cost * 1.3)
+        if self.gravity_level > 1:
+            intensity = min(255, 100 + (self.gravity_level - 1) * 20)
+            self.color = (intensity, 149, 237)
+
+    def upgrade_clone_orbit(self):
+        self.has_clone_orbit = True
+        self.clone_orbit_cost = int(self.clone_orbit_cost * 1.5)
 
     def update(self, dt, is_hovered=False):
-        """Update planet state"""
-        # Hover wobble effect
+        if self.counter_bounce_timer > 0:
+            self.counter_bounce_timer -= dt
+            progress = 1.0 - (self.counter_bounce_timer / 0.5)
+            self.counter_bounce_scale = 1.0 + (progress * 2) * 0.5 if progress < 0.5 else 1.5 - ((progress - 0.5) * 2) * 0.5
+            if self.counter_bounce_timer <= 0: self.counter_bounce_scale = 1.0
+
+        if self.shimmer_timer > 0:
+            self.shimmer_timer -= dt
+            self.shimmer_intensity = self.shimmer_timer / 0.3
+            if self.shimmer_timer <= 0: self.shimmer_intensity = 0
+
         if is_hovered:
-            self.wobble_timer += dt * 5  # Wobble speed
-            if self.wobble_timer > 2 * math.pi:
-                self.wobble_timer -= 2 * math.pi
+            self.wobble_timer += dt * 8
         else:
             self.wobble_timer = 0
 
-    def draw(self, screen, camera, gravity_distance: float = None, air_resistance_intensity: float = None):
-        """Render the planet with optimized performance"""
-        # Convert world position to screen position with wobble effect
+    def draw(self, screen, camera: 'Camera', gravity_distance: float = None, air_resistance_intensity: float = None):
         wobble_x = math.sin(self.wobble_timer) * 2 if self.wobble_timer > 0 else 0
         wobble_y = math.cos(self.wobble_timer * 1.3) * 2 if self.wobble_timer > 0 else 0
         screen_x, screen_y = camera.world_to_screen(self.x, self.y)
         screen_x += wobble_x
         screen_y += wobble_y
         
-        # Scale radius with zoom and hover effect
         hover_scale = 1.15 if self.wobble_timer > 0 else 1.0
         
         if camera.is_map_mode():
-            # In map mode, draw a simple larger circle
-            map_radius = max(4, int(self.radius * 0.7)) # Larger and fixed size
+            map_radius = max(4, int(self.radius * 0.7))
             pygame.draw.circle(screen, self.color, (int(screen_x), int(screen_y)), map_radius)
             return
-        else:
-            # Normal mode - scale with camera zoom
-            scaled_radius = max(2, int(self.radius * camera.zoom * hover_scale))
-            air_radius = max(4, int(self.radius * 3 * camera.zoom * hover_scale))
+
+        scaled_radius = max(2, int(self.radius * camera.zoom * hover_scale))
+        air_radius = max(4, int(self.radius * 3 * camera.zoom * hover_scale))
         
-        # Only draw if planet is visible on screen
         margin = air_radius + 50
-        if (screen_x < -margin or screen_x > camera.screen_width + margin or 
-            screen_y < -margin or screen_y > camera.screen_height + margin):
+        if not (-margin < screen_x < camera.screen_width + margin and -margin < screen_y < camera.screen_height + margin):
             return
         
-        # Draw atmospheric area - OPTIMIZED FOR PERFORMANCE
-        if camera.zoom > 0.4 and camera.zoom < 3.0 and air_radius > 4 and air_radius < 200:
-            # Use direct drawing instead of creating surfaces for better performance
-            for i in range(3):
-                atmo_radius = air_radius - (i * air_radius // 4)
-                if atmo_radius > 2:
-                    alpha = max(5, 15 - (i * 5))  # Decreasing alpha: 15, 10, 5
-                    # Use pygame.gfxdraw for better alpha blending performance
-                    if HAS_GFXDRAW:
-                        pygame.gfxdraw.filled_circle(screen, int(screen_x), int(screen_y), atmo_radius, (100, 150, 255, alpha))
-                    else:
-                        # Fallback to regular circle if gfxdraw not available
-                        atmo_surf = pygame.Surface((atmo_radius * 2, atmo_radius * 2), pygame.SRCALPHA)
-                        pygame.draw.circle(atmo_surf, (100, 150, 255, alpha), (atmo_radius, atmo_radius), atmo_radius)
-                        screen.blit(atmo_surf, (screen_x - atmo_radius, screen_y - atmo_radius))
+        # Optimization: Don't draw complex effects when zoomed out
+        if camera.zoom > 0.3:
+            if self.has_rings:
+                ring_radius1 = int(scaled_radius * 1.4)
+                ring_radius2 = int(scaled_radius * 1.6)
+                ring_color = tuple(c // 2 for c in self.color)
+                pygame.draw.circle(screen, ring_color, (screen_x, screen_y), ring_radius2, max(1, int(3 * camera.zoom)))
+                pygame.draw.circle(screen, ring_color, (screen_x, screen_y), ring_radius1, max(1, int(2 * camera.zoom)))
 
-        # Debug rings for gravity and air resistance ranges - disable when heavily zoomed in
-        if camera.zoom > 0.15 and camera.zoom < 4.0:
-            # Gravity max distance ring
-            grav_r = max(1, int(self.gravity_distance * camera.zoom))
-            if grav_r > 3:  # Only draw if large enough to be visible
-                grav_surf = pygame.Surface((grav_r * 2 + 4, grav_r * 2 + 4), pygame.SRCALPHA)
-                pygame.draw.circle(grav_surf, (0, 255, 0, 80), (grav_r + 2, grav_r + 2), grav_r, 2)
-                screen.blit(grav_surf, (screen_x - grav_r - 2, screen_y - grav_r - 2))
-                
-                # Gravity fade zone outer ring (+200)
-                outer_r = max(grav_r + int(200 * camera.zoom), grav_r + 1)
-                if outer_r > grav_r + 2:  # Only draw if significantly larger
-                    outer_surf = pygame.Surface((outer_r * 2 + 4, outer_r * 2 + 4), pygame.SRCALPHA)
-                    pygame.draw.circle(outer_surf, (0, 255, 0, 40), (outer_r + 2, outer_r + 2), outer_r, 1)
-                    screen.blit(outer_surf, (screen_x - outer_r - 2, screen_y - outer_r - 2))
-            
-            # Air resistance ring (same radius as gravity range in this model)
-            air_r = max(1, int(self.gravity_distance * camera.zoom))
-            if air_r > 3:
-                air_surf = pygame.Surface((air_r * 2 + 4, air_r * 2 + 4), pygame.SRCALPHA)
-                pygame.draw.circle(air_surf, (255, 100, 100, 60), (air_r + 2, air_r + 2), air_r, 1)
-                screen.blit(air_surf, (screen_x - air_r - 2, screen_y - air_r - 2))
+        pygame.draw.circle(screen, self.color, (screen_x, screen_y), scaled_radius)
 
-        # Draw rings behind planet if it has them
-        if self.has_rings and scaled_radius > 6:
-            ring_inner = int(scaled_radius * self.ring_inner_radius)
-            ring_outer = int(scaled_radius * self.ring_outer_radius)
-            ring_surf = pygame.Surface((ring_outer * 2, ring_outer * 2), pygame.SRCALPHA)
-            pygame.draw.circle(ring_surf, (*self.ring_color, 120), (ring_outer, ring_outer), ring_outer)
-            pygame.draw.circle(ring_surf, (0, 0, 0, 0), (ring_outer, ring_outer), ring_inner)
-            screen.blit(ring_surf, (screen_x - ring_outer, screen_y - ring_outer))
-
-        # Draw planet base
-        pygame.draw.circle(screen, self.color, (int(screen_x), int(screen_y)), scaled_radius)
-        
-        # Draw spots if planet has them
-        if self.has_spots and scaled_radius > 4:
-            spot_color = tuple(max(0, c - 30) for c in self.color)
-            for angle, distance, size in self.spots:
-                spot_distance = distance * scaled_radius
-                spot_x = int(screen_x + math.cos(angle) * spot_distance)
-                spot_y = int(screen_y + math.sin(angle) * spot_distance)
-                spot_radius = max(1, int(size * scaled_radius))
+        if camera.zoom > 0.5 and self.has_spots:
+            spot_color = tuple(max(0, c - 40) for c in self.color)
+            for spot_x_ratio, spot_y_ratio in self.spots:
+                spot_x = screen_x + int(spot_x_ratio * scaled_radius * 0.7)
+                spot_y = screen_y + int(spot_y_ratio * scaled_radius * 0.7)
+                spot_radius = max(1, int(scaled_radius * 0.15))
                 pygame.draw.circle(screen, spot_color, (spot_x, spot_y), spot_radius)
         
-        # Draw rings in front of planet if it has them
-        if self.has_rings and scaled_radius > 6:
-            ring_inner = int(scaled_radius * self.ring_inner_radius)
-            ring_outer = int(scaled_radius * self.ring_outer_radius)
-            # Draw thin ring outline
-            pygame.draw.circle(screen, self.ring_color, (int(screen_x), int(screen_y)), ring_outer, 2)
-            pygame.draw.circle(screen, self.ring_color, (int(screen_x), int(screen_y)), ring_inner, 1)
-        
-        # Draw planet outline
-        outline_color = tuple(max(0, c - 50) for c in self.color)
-        pygame.draw.circle(screen, outline_color, (int(screen_x), int(screen_y)), scaled_radius, 2)
+        outline_color = (255,255,255) if self.shimmer_intensity > 0 else (0,0,0)
+        pygame.draw.circle(screen, outline_color, (screen_x, screen_y), scaled_radius, max(1, int(2 * camera.zoom)))
 
-    def draw_preview(self, screen, x, y, size=20):
-        """Draw a small preview of the planet for the UI"""
-        # Draw base
-        pygame.draw.circle(screen, self.color, (x, y), size)
-        
-        # Draw rings if planet has them
-        if self.has_rings:
-            ring_inner = int(size * 1.3)
-            ring_outer = int(size * 1.8)
-            pygame.draw.circle(screen, self.ring_color, (x, y), ring_outer, 1)
-            pygame.draw.circle(screen, self.ring_color, (x, y), ring_inner, 1)
-        
-        # Draw spots if planet has them
-        if self.has_spots:
-            spot_color = tuple(max(0, c - 30) for c in self.color)
-            for angle, distance, spot_size in self.spots[:3]:  # Only first 3 spots in preview
-                spot_distance = distance * size * 0.8
-                spot_x = int(x + math.cos(angle) * spot_distance)
-                spot_y = int(y + math.sin(angle) * spot_distance)
-                spot_radius = max(1, int(spot_size * size * 0.5))
-                pygame.draw.circle(screen, spot_color, (spot_x, spot_y), spot_radius)
-        
-        # Draw outline
-        outline_color = tuple(max(0, c - 50) for c in self.color)
-        pygame.draw.circle(screen, outline_color, (x, y), size, 1)
+        if camera.zoom > 0.2:
+            font_size = max(12, int(20 * camera.zoom))
+            font = pygame.font.Font(None, font_size)
+            text = font.render(str(self.particles_collected), True, WHITE)
+            text_rect = text.get_rect(center=(screen_x, screen_y - int(3 * camera.zoom)))
+            screen.blit(text, text_rect)
+            if self.gravity_level > 1:
+                level_font = pygame.font.Font(None, max(10, int(16 * camera.zoom)))
+                level_text = level_font.render(f"G{self.gravity_level}", True, YELLOW)
+                level_rect = level_text.get_rect(center=(screen_x, screen_y + int(8 * camera.zoom)))
+                screen.blit(level_text, level_rect)
